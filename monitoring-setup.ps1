@@ -1,107 +1,89 @@
 # ---------------------------------------------------------------
-# Azure Monitor Setup - CPU Alert Rules
-# Matches infrastructure from infrastructure.sh
+# Azure Monitor Setup - CPU Alert Rules (Azure CLI)
+# No extra modules needed — uses existing az login session
 # ---------------------------------------------------------------
 
 # Variables
-$ResourceGroup    = "lab4-rg"
-$Location         = "westeurope"
-$AppServicePlan   = "myAppServicePlan"
-$WebAppName       = "DennisWebApp123"
-$AlertRuleName    = "HighCPUAlert"
-$ActionGroupName  = "AppAlertActionGroup"
-$ActionGroupShort = "AppAlerts"
-$AlertEmail       = "dennis.nilsson1111@gmail.com"   # Replace with your email
-$CpuThreshold     = 80    # Percentage
-$WindowSizeMin    = 5     # Minutes
-$FrequencyMin     = 1     # Evaluation frequency in minutes
+$ResourceGroup   = "lab4-rg"
+$AppServicePlan  = "myAppServicePlan"
+$AlertRuleName   = "HighCPUAlert"
+$ActionGroupName = "AppAlertActionGroup"
+$AlertEmail      = "dennis.nilsson1111@gmail.com"
+$CpuThreshold    = 30    # Percentage
+$WindowSize      = "PT1M"  # ISO 8601: 1 minute
+$Frequency       = "PT1M"  # Evaluation frequency: 1 minute
 
 # ---------------------------------------------------------------
-# 1. Ensure the Az modules are available
+# 1. Get the App Service Plan resource ID
 # ---------------------------------------------------------------
-$requiredModules = @("Az.Monitor", "Az.Insights", "Az.Resources")
-foreach ($module in $requiredModules) {
-    if (-not (Get-Module -ListAvailable -Name $module)) {
-        Write-Host "Installing module: $module" -ForegroundColor Yellow
-        Install-Module -Name $module -Scope CurrentUser -Force -AllowClobber
-    }
-}
+Write-Host "Resolving App Service Plan resource ID..." -ForegroundColor Cyan
 
-Import-Module Az.Monitor, Az.Insights, Az.Resources -ErrorAction Stop
+$aspResourceId = az resource show `
+    --resource-group $ResourceGroup `
+    --resource-type "Microsoft.Web/serverfarms" `
+    --name $AppServicePlan `
+    --query id --output tsv
 
-# ---------------------------------------------------------------
-# 2. Create an Action Group (email notification on alert)
-# ---------------------------------------------------------------
-Write-Host "`nCreating Action Group '$ActionGroupName'..." -ForegroundColor Cyan
-
-$emailReceiver = New-AzActionGroupReceiver `
-    -Name "EmailReceiver" `
-    -EmailReceiver `
-    -EmailAddress $AlertEmail
-
-$actionGroup = Set-AzActionGroup `
-    -ResourceGroupName $ResourceGroup `
-    -Name $ActionGroupName `
-    -ShortName $ActionGroupShort `
-    -Receiver $emailReceiver
-
-Write-Host "Action Group created: $($actionGroup.Id)" -ForegroundColor Green
-
-# ---------------------------------------------------------------
-# 3. Get the App Service Plan resource ID (metric source)
-# ---------------------------------------------------------------
-Write-Host "`nResolving App Service Plan resource ID..." -ForegroundColor Cyan
-
-$asp = Get-AzResource `
-    -ResourceGroupName $ResourceGroup `
-    -ResourceType "Microsoft.Web/serverfarms" `
-    -ResourceName $AppServicePlan
-
-if (-not $asp) {
-    Write-Error "App Service Plan '$AppServicePlan' not found in resource group '$ResourceGroup'."
+if (-not $aspResourceId) {
+    Write-Error "App Service Plan '$AppServicePlan' not found in '$ResourceGroup'. Run infrastructure.ps1 first."
     exit 1
 }
-
-$aspResourceId = $asp.ResourceId
 Write-Host "Resource ID: $aspResourceId" -ForegroundColor Green
 
 # ---------------------------------------------------------------
-# 4. Create the CPU Metric Alert Rule
+# 2. Create Action Group (email notification)
+# ---------------------------------------------------------------
+Write-Host "`nCreating Action Group '$ActionGroupName'..." -ForegroundColor Cyan
+
+az monitor action-group create `
+    --resource-group $ResourceGroup `
+    --name $ActionGroupName `
+    --short-name "AppAlerts" `
+    --location "global" `
+    --action email EmailReceiver $AlertEmail
+
+Write-Host "Action Group created." -ForegroundColor Green
+
+# ---------------------------------------------------------------
+# 3. Get the Action Group resource ID
+# ---------------------------------------------------------------
+$actionGroupId = az monitor action-group show `
+    --resource-group $ResourceGroup `
+    --name $ActionGroupName `
+    --query id --output tsv
+
+if (-not $actionGroupId) {
+    Write-Error "Failed to retrieve Action Group ID. Cannot create alert rule."
+    exit 1
+}
+
+# ---------------------------------------------------------------
+# 4. Create CPU Metric Alert Rule
 # ---------------------------------------------------------------
 Write-Host "`nCreating CPU alert rule '$AlertRuleName'..." -ForegroundColor Cyan
 
-$condition = New-AzMetricAlertRuleV2Criteria `
-    -MetricName "CpuPercentage" `
-    -MetricNamespace "Microsoft.Web/serverfarms" `
-    -TimeAggregation "Average" `
-    -Operator "GreaterThan" `
-    -Threshold $CpuThreshold
+az monitor metrics alert create `
+    --name $AlertRuleName `
+    --resource-group $ResourceGroup `
+    --scopes $aspResourceId `
+    --condition "avg CpuPercentage > $CpuThreshold" `
+    --window-size $WindowSize `
+    --evaluation-frequency $Frequency `
+    --action $actionGroupId `
+    --severity 2 `
+    --description "Alert when average CPU exceeds $CpuThreshold% over 1 minute."
 
-$actionGroupId = New-AzMetricAlertRuleV2ActionGroup `
-    -ActionGroupId $actionGroup.Id
-
-Add-AzMetricAlertRuleV2 `
-    -Name $AlertRuleName `
-    -ResourceGroupName $ResourceGroup `
-    -WindowSize (New-TimeSpan -Minutes $WindowSizeMin) `
-    -Frequency (New-TimeSpan -Minutes $FrequencyMin) `
-    -TargetResourceId $aspResourceId `
-    -Condition $condition `
-    -ActionGroup $actionGroupId `
-    -Severity 2 `
-    -Description "Alert when average CPU exceeds $CpuThreshold% over $WindowSizeMin minutes." `
-    -Enabled $true
-
-Write-Host "CPU alert rule '$AlertRuleName' created successfully." -ForegroundColor Green
+Write-Host "CPU alert rule '$AlertRuleName' created." -ForegroundColor Green
 
 # ---------------------------------------------------------------
-# 5. Verify the alert rule
+# 5. Verify
 # ---------------------------------------------------------------
 Write-Host "`nVerifying alert rule..." -ForegroundColor Cyan
 
-$rule = Get-AzMetricAlertRuleV2 `
-    -ResourceGroupName $ResourceGroup `
-    -Name $AlertRuleName
+az monitor metrics alert show `
+    --resource-group $ResourceGroup `
+    --name $AlertRuleName `
+    --query "{Name:name, Enabled:enabled, Severity:severity}" `
+    --output table
 
-Write-Host "Alert Rule: $($rule.Name) | Enabled: $($rule.Enabled) | Severity: $($rule.Severity)" -ForegroundColor Green
 Write-Host "`nMonitoring setup complete." -ForegroundColor Cyan
