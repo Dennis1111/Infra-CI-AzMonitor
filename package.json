@@ -1,0 +1,25 @@
+{
+  "name": "lab4",
+  "version": "1.0.0",
+  "description": "Goal of this project:\r To use Copilot to automate infrastructure, CI/CD, and monitoring as part of a complete DevOps workflow.",
+  "main": "index.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "echo \"No tests specified\" && exit 0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Dennis1111/Infra-CI-AzMonitor.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/Dennis1111/Infra-CI-AzMonitor/issues"
+  },
+  "homepage": "https://github.com/Dennis1111/Infra-CI-AzMonitor#readme",
+  "dependencies": {
+    "express": "^5.2.1"
+  }
+}
